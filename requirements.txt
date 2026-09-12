@@ -1,0 +1,16 @@
+# YOLO11 minimal environment for this project
+# Verified with Python 3.11
+
+# Core ML / inference
+ultralytics>=8.3.0
+torch>=2.0.0
+torchvision>=0.15.0
+onnxruntime>=1.15.0
+opencv-python-headless>=4.7.0
+flask>=2.3.0
+tqdm>=4.66.0
+
+# Optional but commonly used
+numpy>=1.23.0
+Pillow>=9.0.0
+PyYAML>=6.0
