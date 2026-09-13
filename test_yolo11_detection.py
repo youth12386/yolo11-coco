@@ -49,8 +49,8 @@ mock_ort.get_device = MagicMock(return_value='CPU')
 sys.modules['onnxruntime'] = mock_ort
 
 # 模拟flask模块
-mock_flask = MagicMock()
-sys.modules['flask'] = mock_flask
+#mock_flask = MagicMock()
+#sys.modules['flask'] = mock_flask
 
 # 模拟numpy
 import numpy as np
