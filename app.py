@@ -17,7 +17,7 @@ chinese_names =["人", "自行车", "汽车", "摩托车", "飞机", "公共汽�
 class YOLO11:
     """YOLO11 目标检测模型类，用于处理推理和可视化。"""
 
-    def __init__(self, onnx_model, input_image, confidence_thres, iou_thres):
+    def __init__(self, onnx_model, input_image, confidence_thres, iou_thres, target_width=None, target_height=None):
         """
         初始化 YOLO11 类的实例。
         参数：
@@ -36,6 +36,9 @@ class YOLO11:
 
         # 为每个类别生成一个颜色调色板
         self.color_palette = np.random.uniform(0, 255, size=(len(self.classes), 3))
+        # 可选的目标输出尺寸（由调用方指定）
+        self.target_width = target_width
+        self.target_height = target_height
 
     def preprocess(self):
         """
@@ -55,8 +58,10 @@ class YOLO11:
         # 将图像颜色空间从 BGR 转换为 RGB
         img = cv2.cvtColor(self.img, cv2.COLOR_BGR2RGB)
 
-        # 保持宽高比，进行 letterbox 填充, 使用模型要求的输入尺寸
-        img, self.ratio, (self.dw, self.dh) = self.letterbox(img, new_shape=(self.input_width, self.input_height))
+        # 保持宽高比，进行 letterbox 填充, 使用模型要求的输入尺寸或调用方指定的目标尺寸
+        target_h = self.target_height if self.target_height is not None else self.input_height
+        target_w = self.target_width if self.target_width is not None else self.input_width
+        img, self.ratio, (self.dw, self.dh) = self.letterbox(img, new_shape=(target_h, target_w))
 
         # 通过除以 255.0 来归一化图像数据
         image_data = np.array(img) / 255.0
@@ -101,7 +106,8 @@ class YOLO11:
         top, bottom = int(round(dh)), int(round(dh))
         left, right = int(round(dw)), int(round(dw))
         img = cv2.copyMakeBorder(img, top, bottom, left, right, cv2.BORDER_CONSTANT, value=color)
-        img = cv2.resize(img, (640, 640))
+        # 使用传入的新尺寸进行最终缩放（new_shape 是 (height, width)）
+        img = cv2.resize(img, (new_shape[1], new_shape[0]))
         print(f"Final letterboxed image shape: {img.shape}")
 
         return img, (r, r), (dw, dh)
@@ -213,8 +219,21 @@ class YOLO11:
         # 获取模型的输入形状
         model_inputs = session.get_inputs()
         input_shape = model_inputs[0].shape
-        self.input_width = input_shape[2]
-        self.input_height = input_shape[3]
+        # ONNX 输入通常为 [N, C, H, W]
+        model_input_h = input_shape[2]
+        model_input_w = input_shape[3]
+        # 默认使用模型的输入尺寸
+        self.input_height = model_input_h
+        self.input_width = model_input_w
+        # 如果调用方指定了目标尺寸，则覆盖为目标尺寸
+        if self.target_width is not None and self.target_height is not None:
+            try:
+                self.input_width = int(self.target_width)
+                self.input_height = int(self.target_height)
+            except Exception:
+                # 保持模型默认尺寸（后续会有参数校验避免到这里）
+                self.input_width = model_input_w
+                self.input_height = model_input_h
         print(f"模型输入尺寸：宽度 = {self.input_width}, 高度 = {self.input_height}")
 
         # 预处理图像数据，确保使用模型要求的尺寸 (640x640)
@@ -271,6 +290,9 @@ def pole_detection():
     onnx_model_path = data.get('model_path')
     conf_thres = data.get('conf_thres', 0.5)
     iou_thres = data.get('iou_thres', 0.5)
+    # 可选的目标输出尺寸（调用方可指定）
+    target_width = data.get('target_width') or data.get('target_w')
+    target_height = data.get('target_height') or data.get('target_h')
 
     if base64_image is None or onnx_model_path is None:
         return jsonify({
@@ -280,8 +302,34 @@ def pole_detection():
             'result': {}
         })
 
+    # 参数类型与范围校验
     try:
-        detection = YOLO11(onnx_model_path, base64_image, conf_thres, iou_thres)
+        conf_thres = float(conf_thres)
+        iou_thres = float(iou_thres)
+    except (TypeError, ValueError):
+        return jsonify({'code': '0001', 'log_id': datetime.now().strftime("%Y%m%d_%H%M%S_%f"),
+                        'msg': 'conf_thres and iou_thres must be numeric (float)', 'result': {}})
+
+    if not (0.0 <= conf_thres <= 1.0):
+        return jsonify({'code': '0001', 'log_id': datetime.now().strftime("%Y%m%d_%H%M%S_%f"),
+                        'msg': 'conf_thres out of range [0.0, 1.0]', 'result': {}})
+    if not (0.0 <= iou_thres <= 1.0):
+        return jsonify({'code': '0001', 'log_id': datetime.now().strftime("%Y%m%d_%H%M%S_%f"),
+                        'msg': 'iou_thres out of range [0.0, 1.0]', 'result': {}})
+
+    # 目标尺寸校验（若提供）
+    if target_width is not None and target_height is not None:
+        try:
+            target_width = int(target_width)
+            target_height = int(target_height)
+            if target_width <= 0 or target_height <= 0:
+                raise ValueError()
+        except (TypeError, ValueError):
+            return jsonify({'code': '0001', 'log_id': datetime.now().strftime("%Y%m%d_%H%M%S_%f"),
+                            'msg': 'target_width and target_height must be positive integers', 'result': {}})
+
+    try:
+        detection = YOLO11(onnx_model_path, base64_image, conf_thres, iou_thres, target_width, target_height)
         output_image, result_labels, result_scores, boxes = detection.main()
 
         # 将输出图像转换为 base64 编码
