@@ -88,7 +88,7 @@ POST /detection
 ```json
 {
   "image_base64": "base64编码的图片数据",
-  "model_path": "D:/project/code/yolo11-coco/runs/train/exp/weights/best.onnx"
+  "model_path": "runs/train/exp/weights/best.onnx"
 }
 ```
 
@@ -108,3 +108,39 @@ POST /detection
   }
 }
 ```
+
+# 自动化测试说明
+
+本项目中还包含一个自动化测试脚本，用于对 YOLO11 检测服务进行功能、边界值和场景验证，入口文件为 [test_yolo11_detection.py](test_yolo11_detection.py)。该脚本主要用于验证：
+
+- `/detection` 接口是否能正常返回检测结果
+- 参数校验是否符合预期
+- 仓库分类映射是否正确
+- 模型加载失败、图片解码失败等异常场景是否可恢复
+- 边界值参数处理是否稳定
+
+## 1 运行方式
+
+在项目根目录执行：
+
+```powershell
+conda activate yolo11
+python test_yolo11_detection.py
+```
+
+运行后脚本会：
+
+1. 自动创建 Flask 测试客户端
+2. 构造 base64 图片输入
+3. 依次执行 39 个测试用例
+4. 输出通过/失败状态
+5. 生成测试记录文件 `detection_test_records.csv`
+
+## 2 代码包含的测试模块概览
+
+这份测试脚本的核心逻辑可以概括为：
+
+- 目标检测接口测试：验证 `/detection` 的功能正确性
+- 业务分类测试：验证 `get_product_label()` 的仓库归类逻辑
+- 异常处理测试：验证服务对错误输入不崩溃
+- 数据记录测试：将结果保存为 CSV 便于分析和汇报

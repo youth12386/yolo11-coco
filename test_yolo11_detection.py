@@ -16,6 +16,7 @@ YOLO11检测服务 - 自动化测试脚本
 
 import sys
 import os
+import ast
 import unittest
 import json
 import base64
@@ -50,6 +51,29 @@ def record_result(tc_id, title, method, passed, expected='', actual='', input_va
         'status': status,
     })
     print(f"[{status}] {tc_id}: {title}")
+
+
+def safe_json(resp):
+    try:
+        return resp.get_json(silent=True)
+    except Exception:
+        return None
+
+
+def extract_result_labels(resp_json):
+    if not isinstance(resp_json, dict):
+        return []
+    result = resp_json.get('result', {})
+    rec_label = result.get('rec_label', [])
+    if isinstance(rec_label, str):
+        try:
+            parsed = ast.literal_eval(rec_label)
+            return parsed if isinstance(parsed, list) else []
+        except Exception:
+            return []
+    if isinstance(rec_label, list):
+        return rec_label
+    return []
 
 
 class TestFixture:
@@ -158,21 +182,28 @@ class Test_EQ_004(unittest.TestCase):
             record_result('TC-EQ-004', '请求中指定自定义conf_thres和iou_thres参数',
                          '等价类划分-有效等价类', False, 'Flask不可用', 'Flask未安装')
             return
+
         b64 = TestFixture.create_valid_base64_image()
-        resp = client.post('/detection',
-                          data=json.dumps({
-                              'image_base64': b64,
-                              'model_path': MODEL_PATH,
-                              'conf_thres': 0.6,
-                              'iou_thres': 0.4
-                          }),
-                          content_type='application/json')
-        data = resp.get_json()
-        passed = (resp.status_code == 200)
+        low_payload = {'image_base64': b64, 'model_path': MODEL_PATH, 'conf_thres': 0.1, 'iou_thres': 0.1}
+        high_payload = {'image_base64': b64, 'model_path': MODEL_PATH, 'conf_thres': 0.9, 'iou_thres': 0.9}
+
+        resp_low = client.post('/detection', data=json.dumps(low_payload), content_type='application/json')
+        resp_high = client.post('/detection', data=json.dumps(high_payload), content_type='application/json')
+        data_low = safe_json(resp_low)
+        data_high = safe_json(resp_high)
+
+        labels_low = extract_result_labels(data_low)
+        labels_high = extract_result_labels(data_high)
+        passed = (
+            resp_low.status_code == 200 and resp_high.status_code == 200 and
+            data_low.get('code') == '0000' and data_high.get('code') == '0000' and
+            len(labels_high) <= len(labels_low)
+        )
+
         record_result('TC-EQ-004', '请求中指定自定义conf_thres和iou_thres参数',
                      '等价类划分-有效等价类', passed,
-                     '返回code=0000, 自定义阈值生效',
-                     f'code={data.get("code")}, status={resp.status_code}')
+                     '返回code=0000, 且更高阈值不应返回更多检测结果',
+                     f'low_count={len(labels_low)}, high_count={len(labels_high)}, statuses={resp_low.status_code}/{resp_high.status_code}')
 
 class Test_EQ_005(unittest.TestCase):
     """TC-EQ-005: 食品类目标正确映射到食品仓库"""
@@ -266,12 +297,12 @@ class Test_EQ_012(unittest.TestCase):
         resp = client.post('/detection',
                           data=json.dumps({'image_base64': '', 'model_path': MODEL_PATH}),
                           content_type='application/json')
-        data = resp.get_json()
-        passed = (resp.status_code == 200)
+        data = safe_json(resp)
+        passed = (resp.status_code == 200 and data is not None and data.get('code') in ('0001', '0002'))
         record_result('TC-EQ-012', 'base64_image为空字符串',
                      '等价类划分-无效等价类-空字符串输入', passed,
-                     '返回code=0002或正常处理',
-                     f'code={data.get("code")}, status={resp.status_code}')
+                     '返回code=0001或0002，不能当作成功检测',
+                     f'code={data.get("code") if isinstance(data, dict) else data}, status={resp.status_code}')
 
 class Test_EQ_013(unittest.TestCase):
     """TC-EQ-013: onnx_model_path指向不存在的文件"""
@@ -285,12 +316,12 @@ class Test_EQ_013(unittest.TestCase):
         resp = client.post('/detection',
                           data=json.dumps({'image_base64': b64, 'model_path': INVALID_MODEL_PATH}),
                           content_type='application/json')
-        data = resp.get_json()
-        passed = (resp.status_code == 200)
+        data = safe_json(resp)
+        passed = (resp.status_code == 200 and data is not None and data.get('code') in ('0001', '0002'))
         record_result('TC-EQ-013', 'onnx_model_path指向不存在的文件',
                      '等价类划分-无效等价类-模型文件不存在', passed,
-                     '返回code=0002(异常处理)或code=0000',
-                     f'code={data.get("code")}, status={resp.status_code}')
+                     '返回code=0001或0002，不能静默成功',
+                     f'code={data.get("code") if isinstance(data, dict) else data}, status={resp.status_code}')
 
 class Test_EQ_014(unittest.TestCase):
     """TC-EQ-014: 请求体为非JSON格式"""
@@ -301,11 +332,12 @@ class Test_EQ_014(unittest.TestCase):
                          '等价类划分-无效等价类-非法请求格式', False, 'Flask不可用', 'Flask未安装')
             return
         resp = client.post('/detection', data='not json data', content_type='text/plain')
-        passed = (resp.status_code in [400, 415, 200])
+        data = safe_json(resp)
+        passed = (resp.status_code in [400, 415] or (resp.status_code == 200 and isinstance(data, dict) and data.get('code') in ['0001', '0002']))
         record_result('TC-EQ-014', '请求体为非JSON格式',
                      '等价类划分-无效等价类-非法请求格式', passed,
-                     '返回400/415错误码或code=0002',
-                     f'status={resp.status_code}')
+                     '返回400/415或code=0001/0002，不能直接崩溃',
+                     f'status={resp.status_code}, body={data}')
 
 class Test_EQ_015(unittest.TestCase):
     """TC-EQ-015: base64编码非有效图片数据"""
@@ -318,12 +350,12 @@ class Test_EQ_015(unittest.TestCase):
         resp = client.post('/detection',
                           data=json.dumps({'image_base64': 'invalid_base64_data', 'model_path': MODEL_PATH}),
                           content_type='application/json')
-        data = resp.get_json()
-        passed = (resp.status_code == 200)
+        data = safe_json(resp)
+        passed = (resp.status_code == 200 and data is not None and data.get('code') in ('0001', '0002'))
         record_result('TC-EQ-015', 'base64编码非有效图片数据',
                      '等价类划分-无效等价类-无效图片数据', passed,
-                     '返回code=0002(异常处理)',
-                     f'code={data.get("code")}, status={resp.status_code}')
+                     '返回code=0001或0002，不应伪装成成功检测',
+                     f'code={data.get("code") if isinstance(data, dict) else data}, status={resp.status_code}')
 
 
 # ----- 边界值分析测试 (12条) -----
@@ -611,11 +643,12 @@ class Test_SC_007(unittest.TestCase):
                               'conf_thres': 'high'
                           }),
                           content_type='application/json')
-        passed = (resp.status_code in [200, 400])
+        data = safe_json(resp)
+        passed = (resp.status_code in [400, 415] or (resp.status_code == 200 and isinstance(data, dict) and data.get('code') in ['0001', '0002']))
         record_result('TC-SC-007', '请求参数类型错误(conf_thres传字符串)',
                      '场景法-参数类型错误场景', passed,
-                     '服务不崩溃,返回错误或异常处理',
-                     f'status={resp.status_code}')
+                     '服务不崩溃，且不能把错误类型当成有效阈值',
+                     f'status={resp.status_code}, body={data}')
 
 class Test_SC_008(unittest.TestCase):
     """TC-SC-008: 80个COCO类别仓库分类完整性验证"""
