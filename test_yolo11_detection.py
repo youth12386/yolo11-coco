@@ -6,9 +6,9 @@
 YOLO11检测服务 - 自动化测试脚本
 ================================
 测试目标模块: app.py (YOLO11目标检测Flask API服务)
-测试用例总数: 39条
+测试用例总数: 40条
   - 等价类划分: 15条 (TC-EQ-001~015)
-  - 边界值分析: 12条 (TC-BV-001~012)
+  - 边界值分析: 13条 (TC-BV-001~013)
   - 场景法: 12条 (TC-SC-001~012)
 
 运行方式: python test_yolo11_detection.py
@@ -91,21 +91,25 @@ class TestFixture:
             return None
 
     @staticmethod
-    def create_valid_base64_image(width=100, height=100):
-        """创建有效的base64编码图片，直接生成真实图片。"""
+    def create_valid_base64_image(width=640, height=640, draw_objects=False):
+        """创建有效的base64编码图片，支持绘制模拟图像块"""
         try:
-            from PIL import Image
-            img = Image.new('RGB', (width, height), color='white')
+            from PIL import Image, ImageDraw
+            img = Image.new('RGB', (width, height), color=(240, 240, 240))
+            if draw_objects:
+                draw = ImageDraw.Draw(img)
+                # 绘制模拟目标的简单色块
+                draw.rectangle([50, 50, 200, 200], fill=(255, 0, 0))
+                draw.rectangle([300, 300, 500, 500], fill=(0, 255, 0))
             buf = io.BytesIO()
             img.save(buf, format='JPEG')
-            image_bytes = buf.getvalue()
-            return base64.b64encode(image_bytes).decode('utf-8')
+            return base64.b64encode(buf.getvalue()).decode('utf-8')
         except ImportError:
             return "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
-
+        
 print("=" * 60)
 print("YOLO11检测服务 - 自动化测试套件")
-print("测试用例总数: 39 (等价类划分15 + 边界值分析12 + 场景法12)")
+print("测试用例总数: 40 (等价类划分15 + 边界值分析13 + 场景法12)")
 print("=" * 60)
 
 
@@ -262,11 +266,12 @@ class Test_EQ_010(unittest.TestCase):
                           data=json.dumps({'model_path': MODEL_PATH}),
                           content_type='application/json')
         data = resp.get_json()
-        passed = (data.get('code') == '0001')
+        msg = str(data.get('msg', '')) if isinstance(data, dict) else ''
+        passed = (data.get('code') == '0001' and 'image_base64' in msg.lower())
         record_result('TC-EQ-010', '缺少base64_image字段',
                      '等价类划分-无效等价类-缺少必填字段', passed,
-                     '返回code=0001, msg包含错误提示',
-                     f'code={data.get("code")}, msg={data.get("msg")}')
+                     '返回code=0001，并在msg中明确指出缺少 image_base64',
+                     f'code={data.get("code")}, msg={msg}')
 
 class Test_EQ_011(unittest.TestCase):
     """TC-EQ-011: 缺少onnx_model_path字段"""
@@ -280,11 +285,12 @@ class Test_EQ_011(unittest.TestCase):
                           data=json.dumps({'image_base64': 'test'}),
                           content_type='application/json')
         data = resp.get_json()
-        passed = (data.get('code') == '0001')
+        msg = str(data.get('msg', '')) if isinstance(data, dict) else ''
+        passed = (data.get('code') == '0001' and 'model_path' in msg.lower())
         record_result('TC-EQ-011', '缺少onnx_model_path字段',
-                     '等价类划分-无效等价类-缺少必填字段', passed,
-                     '返回code=0001, msg包含错误提示',
-                     f'code={data.get("code")}, msg={data.get("msg")}')
+                 '等价类划分-无效等价类-缺少必填字段', passed,
+                 '返回code=0001，并在msg中明确指出缺少 model_path',
+                 f'code={data.get("code")}, msg={msg}', test_item='POST /detection')
 
 class Test_EQ_012(unittest.TestCase):
     """TC-EQ-012: base64_image为空字符串"""
@@ -298,11 +304,12 @@ class Test_EQ_012(unittest.TestCase):
                           data=json.dumps({'image_base64': '', 'model_path': MODEL_PATH}),
                           content_type='application/json')
         data = safe_json(resp)
-        passed = (resp.status_code == 200 and data is not None and data.get('code') in ('0001', '0002'))
+        msg = str(data.get('msg', '')) if isinstance(data, dict) else ''
+        passed = (resp.status_code == 200 and data is not None and data.get('code') in ('0001') and ('image_base64' in msg.lower() or 'empty' in msg.lower()))
         record_result('TC-EQ-012', 'base64_image为空字符串',
                      '等价类划分-无效等价类-空字符串输入', passed,
-                     '返回code=0001或0002，不能当作成功检测',
-                     f'code={data.get("code") if isinstance(data, dict) else data}, status={resp.status_code}')
+                     '返回错误码并在msg中说明 image_base64 为空或无效',
+                     f'code={data.get("code") if isinstance(data, dict) else data}, msg={msg}, status={resp.status_code}')
 
 class Test_EQ_013(unittest.TestCase):
     """TC-EQ-013: onnx_model_path指向不存在的文件"""
@@ -317,11 +324,12 @@ class Test_EQ_013(unittest.TestCase):
                           data=json.dumps({'image_base64': b64, 'model_path': INVALID_MODEL_PATH}),
                           content_type='application/json')
         data = safe_json(resp)
-        passed = (resp.status_code == 200 and data is not None and data.get('code') in ('0001', '0002'))
+        msg = str(data.get('msg', '')) if isinstance(data, dict) else ''
+        passed = (resp.status_code == 200 and data is not None and data.get('code') in ('0001') and ('model' in msg.lower() or 'not found' in msg.lower()))
         record_result('TC-EQ-013', 'onnx_model_path指向不存在的文件',
-                     '等价类划分-无效等价类-模型文件不存在', passed,
-                     '返回code=0001或0002，不能静默成功',
-                     f'code={data.get("code") if isinstance(data, dict) else data}, status={resp.status_code}')
+                 '等价类划分-无效等价类-模型文件不存在', passed,
+                 '返回错误码并在msg中说明模型文件缺失或不可访问',
+                 f'code={data.get("code") if isinstance(data, dict) else data}, msg={msg}, status={resp.status_code}', test_item='POST /detection')
 
 class Test_EQ_014(unittest.TestCase):
     """TC-EQ-014: 请求体为非JSON格式"""
@@ -333,11 +341,15 @@ class Test_EQ_014(unittest.TestCase):
             return
         resp = client.post('/detection', data='not json data', content_type='text/plain')
         data = safe_json(resp)
-        passed = (resp.status_code in [400, 415] or (resp.status_code == 200 and isinstance(data, dict) and data.get('code') in ['0001', '0002']))
+        msg = str(data.get('msg', '')) if isinstance(data, dict) else ''
+        passed = (
+            resp.status_code in [400, 415] or
+            (resp.status_code == 200 and isinstance(data, dict) and data.get('code') in ['0001'] and ('json' in msg.lower() or 'object' in msg.lower()))
+        )
         record_result('TC-EQ-014', '请求体为非JSON格式',
                      '等价类划分-无效等价类-非法请求格式', passed,
-                     '返回400/415或code=0001/0002，不能直接崩溃',
-                     f'status={resp.status_code}, body={data}')
+                     '返回400/415或code=0001，并在msg中说明请求不是合法JSON对象',
+                     f'status={resp.status_code}, msg={msg}, body={data}')
 
 class Test_EQ_015(unittest.TestCase):
     """TC-EQ-015: base64编码非有效图片数据"""
@@ -351,11 +363,12 @@ class Test_EQ_015(unittest.TestCase):
                           data=json.dumps({'image_base64': 'invalid_base64_data', 'model_path': MODEL_PATH}),
                           content_type='application/json')
         data = safe_json(resp)
-        passed = (resp.status_code == 200 and data is not None and data.get('code') in ('0001', '0002'))
+        msg = str(data.get('msg', '')) if isinstance(data, dict) else ''
+        passed = (resp.status_code == 200 and data is not None and data.get('code') in ('0001') and ('image' in msg.lower() or 'decode' in msg.lower() or 'invalid' in msg.lower()))
         record_result('TC-EQ-015', 'base64编码非有效图片数据',
                      '等价类划分-无效等价类-无效图片数据', passed,
-                     '返回code=0001或0002，不应伪装成成功检测',
-                     f'code={data.get("code") if isinstance(data, dict) else data}, status={resp.status_code}')
+                     '返回错误码并在msg中说明图片解码或 image_base64 非法',
+                     f'code={data.get("code") if isinstance(data, dict) else data}, msg={msg}, status={resp.status_code}')
 
 
 # ----- 边界值分析测试 (12条) -----
@@ -363,155 +376,264 @@ class Test_EQ_015(unittest.TestCase):
 class Test_BV_001(unittest.TestCase):
     """TC-BV-001: conf_thres设为下边界0.0"""
     def test_conf_threshold_min(self):
-        # 验证置信度下边界0.0的逻辑
-        conf_thres = 0.0
-        test_scores = [0.0, 0.5, 1.0]
-        detected = [s for s in test_scores if s >= conf_thres]
-        passed = (len(detected) == 3)  # 所有目标都被保留
+        client = TestFixture.create_flask_client()
+        if client is None:
+            record_result('TC-BV-001', 'conf_thres设为下边界0.0',
+                         '边界值分析-置信度下边界', False, 'Flask不可用', 'Flask未安装')
+            return
+
+        b64 = TestFixture.create_valid_base64_image()
+        resp = client.post('/detection',
+                          data=json.dumps({'image_base64': b64, 'model_path': MODEL_PATH, 'conf_thres': 0.0, 'iou_thres': 0.5}),
+                          content_type='application/json')
+        data = safe_json(resp)
+        passed = (resp.status_code == 200 and isinstance(data, dict) and data.get('code') in ('0000'))
         record_result('TC-BV-001', 'conf_thres设为下边界0.0',
                      '边界值分析-置信度下边界', passed,
-                     '所有置信度>=0的目标均被保留',
-                     f'conf={conf_thres}, detected={len(detected)}/3')
+                     '接口在置信度下边界0.0时不应崩溃',
+                     f'code={data.get("code") if isinstance(data, dict) else data}, status={resp.status_code}')
 
 class Test_BV_002(unittest.TestCase):
     """TC-BV-002: conf_thres设为上边界1.0"""
     def test_conf_threshold_max(self):
-        conf_thres = 1.0
-        test_scores = [0.5, 0.9, 1.0]
-        detected = [s for s in test_scores if s >= conf_thres]
-        passed = (len(detected) == 1 and 1.0 in detected)
+        client = TestFixture.create_flask_client()
+        if client is None:
+            record_result('TC-BV-002', 'conf_thres设为上边界1.0',
+                         '边界值分析-置信度上边界', False, 'Flask不可用', 'Flask未安装')
+            return
+
+        b64 = TestFixture.create_valid_base64_image()
+        resp = client.post('/detection',
+                          data=json.dumps({'image_base64': b64, 'model_path': MODEL_PATH, 'conf_thres': 1.0, 'iou_thres': 0.5}),
+                          content_type='application/json')
+        data = safe_json(resp)
+        passed = (resp.status_code == 200 and isinstance(data, dict) and data.get('code') in ('0000'))
         record_result('TC-BV-002', 'conf_thres设为上边界1.0',
                      '边界值分析-置信度上边界', passed,
-                     '仅置信度=1.0的目标被保留',
-                     f'conf={conf_thres}, detected={len(detected)}/3')
+                     '接口在置信度上边界1.0时不应崩溃',
+                     f'code={data.get("code") if isinstance(data, dict) else data}, status={resp.status_code}')
 
 class Test_BV_003(unittest.TestCase):
     """TC-BV-003: conf_thres低于下边界-0.1"""
     def test_conf_threshold_below_min(self):
-        conf_thres = -0.1
-        test_scores = [0.0, 0.5, 1.0]
-        detected = [s for s in test_scores if s >= conf_thres]
-        passed = (len(detected) == 3)  # 所有目标都被保留(阈值低于最小值)
-        record_result('TC-BV-003', 'conf_thres设为低于下边界-0.1',
+        client = TestFixture.create_flask_client()
+        if client is None:
+            record_result('TC-BV-003', 'conf_thres低于下边界-0.1',
+                         '边界值分析-置信度低于下边界', False, 'Flask不可用', 'Flask未安装')
+            return
+
+        b64 = TestFixture.create_valid_base64_image()
+        resp = client.post('/detection',
+                          data=json.dumps({'image_base64': b64, 'model_path': MODEL_PATH, 'conf_thres': -0.1, 'iou_thres': 0.5}),
+                          content_type='application/json')
+        data = safe_json(resp)
+        passed = (resp.status_code == 200 and isinstance(data, dict) and data.get('code') == '0001')
+        record_result('TC-BV-003', 'conf_thres低于下边界-0.1',
                      '边界值分析-置信度低于下边界', passed,
-                     '所有目标均被保留(阈值无效但程序不崩溃)',
-                     f'conf={conf_thres}, detected={len(detected)}/3')
+                     '接口在负阈值输入下应返回错误码0001，不能静默成功',
+                     f'code={data.get("code") if isinstance(data, dict) else data}, status={resp.status_code}')
 
 class Test_BV_004(unittest.TestCase):
     """TC-BV-004: conf_thres高于上边界1.1"""
     def test_conf_threshold_above_max(self):
-        conf_thres = 1.1
-        test_scores = [0.5, 0.9, 1.0]
-        detected = [s for s in test_scores if s >= conf_thres]
-        passed = (len(detected) == 0)  # 无目标被保留
-        record_result('TC-BV-004', 'conf_thres设为高于上边界1.1',
+        client = TestFixture.create_flask_client()
+        if client is None:
+            record_result('TC-BV-004', 'conf_thres高于上边界1.1',
+                         '边界值分析-置信度高于上边界', False, 'Flask不可用', 'Flask未安装')
+            return
+
+        b64 = TestFixture.create_valid_base64_image()
+        resp = client.post('/detection',
+                          data=json.dumps({'image_base64': b64, 'model_path': MODEL_PATH, 'conf_thres': 1.1, 'iou_thres': 0.5}),
+                          content_type='application/json')
+        data = safe_json(resp)
+        passed = (resp.status_code == 200 and isinstance(data, dict) and data.get('code') == '0001')
+        record_result('TC-BV-004', 'conf_thres高于上边界1.1',
                      '边界值分析-置信度高于上边界', passed,
-                     '无目标被保留(置信度不可能>1.0)',
-                     f'conf={conf_thres}, detected={len(detected)}/3')
+                     '接口在超出合法置信度上界时应返回错误码0001，不能静默成功',
+                     f'code={data.get("code") if isinstance(data, dict) else data}, status={resp.status_code}')
 
 class Test_BV_005(unittest.TestCase):
     """TC-BV-005: iou_thres设为下边界0.0"""
     def test_iou_threshold_min(self):
-        iou_thres = 0.0
-        # IoU>=0即被抑制(最严格)
-        test_ious = [0.0, 0.3, 0.7]
-        suppressed = [i for i in test_ious if i >= iou_thres]
-        passed = (len(suppressed) == 3)  # 所有重叠框都被抑制
+        client = TestFixture.create_flask_client()
+        if client is None:
+            record_result('TC-BV-005', 'iou_thres设为下边界0.0',
+                         '边界值分析-IoU下边界', False, 'Flask不可用', 'Flask未安装')
+            return
+
+        b64 = TestFixture.create_valid_base64_image()
+        resp = client.post('/detection',
+                          data=json.dumps({'image_base64': b64, 'model_path': MODEL_PATH, 'conf_thres': 0.5, 'iou_thres': 0.0}),
+                          content_type='application/json')
+        data = safe_json(resp)
+        passed = (resp.status_code == 200 and isinstance(data, dict) and data.get('code') in ('0000'))
         record_result('TC-BV-005', 'iou_thres设为下边界0.0',
                      '边界值分析-IoU下边界', passed,
-                     'IoU>=0即被抑制，保留最少的框',
-                     f'iou_thres={iou_thres}, suppressed={len(suppressed)}/3')
+                     '接口在IoU下边界0.0时不应崩溃',
+                     f'code={data.get("code") if isinstance(data, dict) else data}, status={resp.status_code}')
 
 class Test_BV_006(unittest.TestCase):
     """TC-BV-006: iou_thres设为上边界1.0"""
     def test_iou_threshold_max(self):
-        iou_thres = 1.0
-        test_ious = [0.0, 0.5, 1.0]
-        suppressed = [i for i in test_ious if i >= iou_thres]
-        passed = (len(suppressed) == 1 and 1.0 in suppressed)
+        client = TestFixture.create_flask_client()
+        if client is None:
+            record_result('TC-BV-006', 'iou_thres设为上边界1.0',
+                         '边界值分析-IoU上边界', False, 'Flask不可用', 'Flask未安装')
+            return
+
+        b64 = TestFixture.create_valid_base64_image()
+        resp = client.post('/detection',
+                          data=json.dumps({'image_base64': b64, 'model_path': MODEL_PATH, 'conf_thres': 0.5, 'iou_thres': 1.0}),
+                          content_type='application/json')
+        data = safe_json(resp)
+        passed = (resp.status_code == 200 and isinstance(data, dict) and data.get('code') in ('0000'))
         record_result('TC-BV-006', 'iou_thres设为上边界1.0',
                      '边界值分析-IoU上边界', passed,
-                     '仅IoU=1.0(完全重叠)才被抑制',
-                     f'iou_thres={iou_thres}, suppressed={len(suppressed)}/3')
+                     '接口在IoU上边界1.0时不应崩溃',
+                     f'code={data.get("code") if isinstance(data, dict) else data}, status={resp.status_code}')
 
 class Test_BV_007(unittest.TestCase):
     """TC-BV-007: 输入极小图片(1x1像素)"""
     def test_minimal_image(self):
-        # 验证1x1图片的预处理兼容性
-        img_shape = (1, 1, 3)
-        passed = (img_shape[0] >= 1 and img_shape[1] >= 1)
+        client = TestFixture.create_flask_client()
+        if client is None:
+            record_result('TC-BV-007', '输入极小图片(1x1像素)',
+                         '边界值分析-极小图片', False, 'Flask不可用', 'Flask未安装')
+            return
+
+        b64 = TestFixture.create_valid_base64_image(width=1, height=1)
+        resp = client.post('/detection',
+                          data=json.dumps({'image_base64': b64, 'model_path': MODEL_PATH}),
+                          content_type='application/json')
+        data = safe_json(resp)
+        passed = (resp.status_code == 200 and isinstance(data, dict) and data.get('code') in ('0000'))
         record_result('TC-BV-007', '输入极小图片(1x1像素)',
                      '边界值分析-极小图片', passed,
-                     '预处理不崩溃，能处理极小图片',
-                     f'img_shape={img_shape}')
+                     '接口应返回200并不能直接因极小尺寸崩溃',
+                     f'code={data.get("code") if isinstance(data, dict) else data}, status={resp.status_code}')
 
 class Test_BV_008(unittest.TestCase):
     """TC-BV-008: 输入超大尺寸图片(如8000x8000)"""
     def test_large_image(self):
-        # 验证超大图片的预处理兼容性
-        img_shape = (8000, 8000, 3)
-        passed = (img_shape[0] > 0 and img_shape[1] > 0)
+        client = TestFixture.create_flask_client()
+        if client is None:
+            record_result('TC-BV-008', '输入超大尺寸图片(如8000x8000)',
+                         '边界值分析-超大图片', False, 'Flask不可用', 'Flask未安装')
+            return
+
+        b64 = TestFixture.create_valid_base64_image(width=8000, height=8000)
+        resp = client.post('/detection',
+                          data=json.dumps({'image_base64': b64, 'model_path': MODEL_PATH}),
+                          content_type='application/json')
+        data = safe_json(resp)
+        passed = (resp.status_code == 200 and isinstance(data, dict) and data.get('code') in ('0000'))
         record_result('TC-BV-008', '输入超大尺寸图片(如8000x8000)',
                      '边界值分析-超大图片', passed,
-                     '预处理不崩溃(应有内存保护)',
-                     f'img_shape={img_shape}')
+                     '接口应返回200并不能直接因超大图崩溃',
+                     f'code={data.get("code") if isinstance(data, dict) else data}, status={resp.status_code}')
 
 class Test_BV_009(unittest.TestCase):
     """TC-BV-009: 目标边界框左上角坐标为(0,0)"""
     def test_box_top_left_origin(self):
-        # 验证坐标回退计算(0,0)边界
-        xmin, ymin = 0, 0
-        xmax, ymax = 50, 80
-        img_w, img_h = 640, 640
-        # 模拟letterbox后的坐标还原
-        left = int(xmin - 0)  # dw=0
-        top = int(ymin - 0)   # dh=0
-        passed = (left >= 0 and top >= 0)
+        detector = target_module.YOLO11('runs/train/exp/weights/best.onnx', '', 0.5, 0.5)
+        img = np.zeros((200, 200, 3), dtype=np.uint8)
+        original = img.copy()
+        try:
+            detector.draw_detections(img, [0, 0, 40, 60], 0.99, 0)
+            passed = (img.shape == original.shape and img.dtype == original.dtype and np.any(img != original))
+            actual = f'origin_box_drawn={bool(np.any(img != original))}, shape={img.shape}'
+        except Exception as exc:
+            passed = False
+            actual = f'exception={type(exc).__name__}: {exc}'
+
         record_result('TC-BV-009', '目标边界框左上角坐标为(0,0)',
                      '边界值分析-坐标边界左上角', passed,
-                     '坐标回退后无负坐标',
-                     f'left={left}, top={top}')
+                     '图像处理函数应能在坐标原点处绘制边界框而不崩溃',
+                     actual, test_item='YOLO11.draw_detections')
 
 class Test_BV_010(unittest.TestCase):
     """TC-BV-010: 目标边界框右下角坐标为图片宽高"""
     def test_box_bottom_right_edge(self):
-        # 验证坐标回退计算(宽高边界)
-        img_w, img_h = 640, 640
-        xmin, ymin = 590, 590
-        xmax, ymax = 640, 640
-        width = int(xmax - xmin)
-        height = int(ymax - ymin)
-        passed = (width > 0 and height > 0 and xmax <= img_w and ymax <= img_h)
+        detector = target_module.YOLO11('runs/train/exp/weights/best.onnx', '', 0.5, 0.5)
+        img = np.zeros((200, 200, 3), dtype=np.uint8)
+        original = img.copy()
+        x1 = img.shape[1] - 10
+        y1 = img.shape[0] - 10
+        try:
+            detector.draw_detections(img, [x1, y1, 20, 20], 0.99, 0)
+            passed = (img.shape == original.shape and img.dtype == original.dtype and np.any(img != original))
+            actual = f'edge_box_drawn={bool(np.any(img != original))}, last_pixel=({x1},{y1})'
+        except Exception as exc:
+            passed = False
+            actual = f'exception={type(exc).__name__}: {exc}'
+
         record_result('TC-BV-010', '目标边界框右下角坐标为图片宽高',
                      '边界值分析-坐标边界右下角', passed,
-                     '边界框不超出图片范围',
-                     f'width={width}, height={height}, xmax={xmax}, ymax={ymax}')
+                     '图像处理函数应能在图片右下角边界处绘制边界框而不崩溃',
+                     actual)
 
 class Test_BV_011(unittest.TestCase):
     """TC-BV-011: 模型输出恰好有1个检测目标"""
     def test_single_detection(self):
-        # 验证单目标检测处理
-        boxes = [[10, 20, 50, 80]]
-        scores = [0.95]
-        labels = ['person']
-        passed = (len(boxes) == 1 and len(scores) == 1)
+        client = TestFixture.create_flask_client()
+        if client is None:
+            record_result('TC-BV-011', '模型输出恰好有1个检测目标',
+                         '边界值分析-单目标检测', False, 'Flask不可用', 'Flask未安装')
+            return
+
+        b64 = TestFixture.create_valid_base64_image()
+        resp = client.post('/detection',
+                          data=json.dumps({'image_base64': b64, 'model_path': MODEL_PATH, 'conf_thres': 0.9, 'iou_thres': 0.9}),
+                          content_type='application/json')
+        data = safe_json(resp)
+        labels = extract_result_labels(data)
+        passed = (resp.status_code == 200 and isinstance(data, dict) and data.get('code') == '0000' and isinstance(labels, list))
         record_result('TC-BV-011', '模型输出恰好有1个检测目标',
                      '边界值分析-单目标检测', passed,
-                     'rec_label长度为1, rec_boxes长度为1',
-                     f'boxes={len(boxes)}, scores={len(scores)}')
+                     '接口返回有效检测结果列表，且无异常',
+                     f'code={data.get("code") if isinstance(data, dict) else data}, labels={labels}')
 
 class Test_BV_012(unittest.TestCase):
     """TC-BV-012: 模型输出恰好无检测目标(置信度恰好等于阈值)"""
     def test_confidence_exactly_at_threshold(self):
-        # 验证置信度恰好等于阈值时的处理
-        conf_thres = 0.5
-        score = 0.5  # 恰好等于阈值
-        detected = score >= conf_thres  # >= 判断，应该保留
-        passed = (detected == True)
+        client = TestFixture.create_flask_client()
+        if client is None:
+            record_result('TC-BV-012', '模型输出恰好无检测目标(置信度恰好等于阈值)',
+                         '边界值分析-置信度恰好等于阈值', False, 'Flask不可用', 'Flask未安装')
+            return
+
+        b64 = TestFixture.create_valid_base64_image()
+        resp = client.post('/detection',
+                          data=json.dumps({'image_base64': b64, 'model_path': MODEL_PATH, 'conf_thres': 0.5, 'iou_thres': 0.5}),
+                          content_type='application/json')
+        data = safe_json(resp)
+        passed = (resp.status_code == 200 and isinstance(data, dict) and data.get('code') in ('0000'))
         record_result('TC-BV-012', '模型输出恰好无检测目标(置信度恰好等于阈值)',
                      '边界值分析-置信度恰好等于阈值', passed,
-                     '置信度=阈值时应被保留(>=判断)',
-                     f'score={score} >= conf_thres={conf_thres}: {detected}')
+                     '阈值边界值输入下接口应保持稳定',
+                     f'code={data.get("code") if isinstance(data, dict) else data}, status={resp.status_code}')
+
+class Test_BV_013(unittest.TestCase):
+    """TC-BV-013: letterbox应遵守调用方指定的非640目标尺寸"""
+    def test_letterbox_honors_requested_shape(self):
+        # letterbox 的 new_shape 参数是公开接口；非模型默认尺寸也必须被尊重。
+        detector = target_module.YOLO11('runs/train/exp/weights/best.onnx', '', 0.5, 0.5)
+        img = np.zeros((100, 200, 3), dtype=np.uint8)
+        requested_shape = (320, 480)
+
+        letterboxed, _, _ = detector.letterbox(img, new_shape=requested_shape)
+        passed = tuple(letterboxed.shape[:2]) == requested_shape
+        record_result(
+            'TC-BV-013',
+            'letterbox应遵守调用方指定的非640目标尺寸',
+            '边界值分析-自定义letterbox尺寸',
+            passed,
+            f'输出尺寸应为{requested_shape[0]}x{requested_shape[1]}',
+            f'实际输出尺寸={tuple(letterboxed.shape[:2])}',
+            test_item='YOLO11.letterbox'
+        )
+        self.assertEqual(tuple(letterboxed.shape[:2]), requested_shape)
 
 
 # ----- 场景法测试 (12条) -----
@@ -548,12 +670,12 @@ class Test_SC_002(unittest.TestCase):
         resp = client.post('/detection',
                           data=json.dumps({'image_base64': b64, 'model_path': MODEL_PATH}),
                           content_type='application/json')
-        data = resp.get_json()
-        passed = (resp.status_code == 200)
+        data = safe_json(resp)
+        passed = (resp.status_code == 200 and isinstance(data, dict) and data.get('code') == '0000' and 'rec_boxes' in data.get('result', {}))
         record_result('TC-SC-002', '多目标密集场景(目标重叠)',
-                     '场景法-多目标密集场景', passed,
-                     'NMS正确抑制重叠框,检测结果正确',
-                     f'code={data.get("code")}')
+                 '场景法-多目标密集场景', passed,
+                 'NMS正确抑制重叠框,返回有效检测结果',
+                 f'code={data.get("code") if isinstance(data, dict) else data}, status={resp.status_code}', test_item='POST /detection (NMS)')
 
 class Test_SC_003(unittest.TestCase):
     """TC-SC-003: 连续多次请求(模拟并发)"""
@@ -569,12 +691,13 @@ class Test_SC_003(unittest.TestCase):
             resp = client.post('/detection',
                               data=json.dumps({'image_base64': b64, 'model_path': MODEL_PATH}),
                               content_type='application/json')
-            if resp.status_code == 200:
+            data = safe_json(resp)
+            if resp.status_code == 200 and isinstance(data, dict) and data.get('code') == '0000':
                 success_count += 1
         passed = (success_count == 5)
         record_result('TC-SC-003', '连续多次请求(模拟并发)',
                      '场景法-连续请求场景', passed,
-                     '所有请求均成功处理,无崩溃',
+                     '所有请求均成功处理且返回0000,无崩溃',
                      f'成功={success_count}/5')
 
 class Test_SC_004(unittest.TestCase):
@@ -602,12 +725,12 @@ class Test_SC_005(unittest.TestCase):
         resp = client.post('/detection',
                           data=json.dumps({'image_base64': b64, 'model_path': BROKEN_MODEL_PATH}),
                           content_type='application/json')
-        data = resp.get_json()
-        passed = (resp.status_code == 200)
-        record_result('TC-SC-005', '模型文件加载失败场景',
-                     '场景法-模型加载失败场景', passed,
-                     '返回code=0002, 服务不崩溃',
-                     f'code={data.get("code")}, status={resp.status_code}')
+        data = safe_json(resp)
+        passed = (resp.status_code == 200 and isinstance(data, dict) and data.get('code') == '0001')
+        record_result('TC-SC-005', '模型文件加载失败場景',
+                 '场景法-模型加载失败场景', passed,
+                 '返回code=0001, 服务不崩溃',
+                 f'code={data.get("code") if isinstance(data, dict) else data}, status={resp.status_code}', test_item='POST /detection (model loading)')
 
 class Test_SC_006(unittest.TestCase):
     """TC-SC-006: 图片解码失败场景"""
@@ -620,12 +743,12 @@ class Test_SC_006(unittest.TestCase):
         resp = client.post('/detection',
                           data=json.dumps({'image_base64': 'invalid_image_data', 'model_path': MODEL_PATH}),
                           content_type='application/json')
-        data = resp.get_json()
-        passed = (resp.status_code == 200)
+        data = safe_json(resp)
+        passed = (resp.status_code == 200 and isinstance(data, dict) and data.get('code') == '0001')
         record_result('TC-SC-006', '图片解码失败场景',
                      '场景法-图片解码失败场景', passed,
-                     '返回code=0002, 服务不崩溃',
-                     f'code={data.get("code")}')
+                     '返回code=0001, 服务不崩溃',
+                     f'code={data.get("code") if isinstance(data, dict) else data}, status={resp.status_code}')
 
 class Test_SC_007(unittest.TestCase):
     """TC-SC-007: 请求参数类型错误(conf_thres传字符串)"""
@@ -644,11 +767,15 @@ class Test_SC_007(unittest.TestCase):
                           }),
                           content_type='application/json')
         data = safe_json(resp)
-        passed = (resp.status_code in [400, 415] or (resp.status_code == 200 and isinstance(data, dict) and data.get('code') in ['0001', '0002']))
+        msg = str(data.get('msg', '')) if isinstance(data, dict) else ''
+        passed = (
+            resp.status_code in [400, 415] or
+            (resp.status_code == 200 and isinstance(data, dict) and data.get('code') in ['0001'] and ('conf_thres' in msg.lower() or 'threshold' in msg.lower() or 'numeric' in msg.lower()))
+        )
         record_result('TC-SC-007', '请求参数类型错误(conf_thres传字符串)',
                      '场景法-参数类型错误场景', passed,
-                     '服务不崩溃，且不能把错误类型当成有效阈值',
-                     f'status={resp.status_code}, body={data}')
+                     '服务不崩溃，并且在 msg 中明确说明 conf_thres 类型错误',
+                     f'status={resp.status_code}, msg={msg}, body={data}')
 
 class Test_SC_008(unittest.TestCase):
     """TC-SC-008: 80个COCO类别仓库分类完整性验证"""
@@ -709,41 +836,63 @@ class Test_SC_010(unittest.TestCase):
         data2 = resp2.get_json()
         passed = (data1.get('code') == '0001' and data2.get('code') == '0000')
         record_result('TC-SC-010', '异常后服务恢复场景',
-                     '场景法-异常恢复场景', passed,
-                     '错误请求返回code=0001, 后续正常请求仍返回code=0000',
-                     f'error_code={data1.get("code")}, normal_code={data2.get("code")}')
+                 '场景法-异常恢复场景', passed,
+                 '错误请求返回code=0001, 后续正常请求仍返回code=0000',
+                 f'error_code={data1.get("code")}, normal_code={data2.get("code")}', test_item='POST /detection')
 
 class Test_SC_011(unittest.TestCase):
     """TC-SC-011: 不同宽高比图片的letterbox处理"""
     def test_different_aspect_ratios(self):
-        # 验证不同宽高比图片的letterbox处理
+        # 真实调用 app.py 中的 YOLO11.letterbox 处理逻辑，而不是只比较常量
         shapes = [(480, 640), (640, 480), (640, 640)]  # 横版, 竖版, 正方形
+        detector = target_module.YOLO11('runs/train/exp/weights/best.onnx', '', 0.5, 0.5)
         passed = True
+        observed_shapes = []
+
         for h, w in shapes:
-            # letterbox后应统一为640x640
-            final_shape = (640, 640)
-            if final_shape != (640, 640):
+            img = np.zeros((h, w, 3), dtype=np.uint8)
+            letterboxed, _, _ = detector.letterbox(img, new_shape=(640, 640))
+            observed_shapes.append((h, w, tuple(letterboxed.shape[:2])))
+            if tuple(letterboxed.shape[:2]) != (640, 640):
                 passed = False
+
         record_result('TC-SC-011', '不同宽高比图片的letterbox处理',
                      '场景法-不同宽高比场景', passed,
                      '所有宽高比图片letterbox后均为640x640',
-                     f'tested_shapes={shapes}')
+                     f'tested_shapes={observed_shapes}')
 
 class Test_SC_012(unittest.TestCase):
     """TC-SC-012: log_id时间戳唯一性验证"""
     def test_log_id_uniqueness(self):
-        from datetime import datetime
-        log_ids = set()
+        client = TestFixture.create_flask_client()
+        if client is None:
+            record_result('TC-SC-012', 'log_id时间戳唯一性验证',
+                         '场景法-日志唯一性场景', False, 'Flask不可用', 'Flask未安装')
+            return
+
+        b64 = TestFixture.create_valid_base64_image()
+        log_ids = []
+        last_status = None
         for i in range(5):
-            log_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-            log_ids.add(log_id)
-        # 短时间内生成的log_id可能有重复(同一秒内)
-        # 但微秒部分应不同
-        passed = True  # 格式正确即可
+            resp = client.post('/detection',
+                              data=json.dumps({'image_base64': b64, 'model_path': MODEL_PATH}),
+                              content_type='application/json')
+            last_status = resp.status_code
+            data = safe_json(resp)
+            log_id = data.get('log_id') if isinstance(data, dict) else None
+            if log_id:
+                log_ids.append(log_id)
+
+        passed = (
+            last_status == 200 and
+            len(log_ids) == 5 and
+            len(set(log_ids)) == 5 and
+            all(isinstance(log_id, str) and len(log_id) >= 15 for log_id in log_ids)
+        )
         record_result('TC-SC-012', 'log_id时间戳唯一性验证',
                      '场景法-日志唯一性场景', passed,
-                     'log_id格式为YYYYMMDD_HHMMSS_ffffff',
-                     f'log_id_samples={list(log_ids)[:3]}')
+                     '接口返回的 5 个 log_id 均存在且互不重复',
+                     f'log_ids={log_ids}, unique_count={len(set(log_ids))}, status={last_status}', test_item='POST /detection (log_id)')
 
 
 # ============================================================
@@ -761,7 +910,7 @@ def run_all_tests():
         Test_EQ_011, Test_EQ_012, Test_EQ_013, Test_EQ_014, Test_EQ_015,
         Test_BV_001, Test_BV_002, Test_BV_003, Test_BV_004, Test_BV_005,
         Test_BV_006, Test_BV_007, Test_BV_008, Test_BV_009, Test_BV_010,
-        Test_BV_011, Test_BV_012,
+        Test_BV_011, Test_BV_012, Test_BV_013,
         Test_SC_001, Test_SC_002, Test_SC_003, Test_SC_004, Test_SC_005,
         Test_SC_006, Test_SC_007, Test_SC_008, Test_SC_009, Test_SC_010,
         Test_SC_011, Test_SC_012,

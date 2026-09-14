@@ -269,14 +269,14 @@ def pole_detection():
     data = request.get_json()
     base64_image = data.get('image_base64')
     onnx_model_path = data.get('model_path')
-    conf_thres = 0.5
-    iou_thres = 0.5
+    conf_thres = data.get('conf_thres', 0.5)
+    iou_thres = data.get('iou_thres', 0.5)
 
     if base64_image is None or onnx_model_path is None:
         return jsonify({
             'code': '0001',
             'log_id': datetime.now().strftime("%Y%m%d_%H%M%S_%f"),
-            'msg': 'Missing base64_image or onnx_model_path',
+            'msg': 'Missing image_base64 or onnx_model_path',
             'result': {}
         })
 
@@ -307,7 +307,7 @@ def pole_detection():
         })
     except Exception as e:
         return jsonify({
-            'code': '0002',
+            'code': '0001',
             'log_id': datetime.now().strftime("%Y%m%d_%H%M%S_%f"),
             'msg': f'Error: {str(e)}',
             'result': {}
