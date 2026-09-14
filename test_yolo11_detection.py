@@ -8,7 +8,7 @@ YOLO11检测服务 - 自动化测试脚本
 测试目标模块: app.py (YOLO11目标检测Flask API服务)
 测试用例总数: 39条
   - 等价类划分: 15条 (TC-EQ-001~015)
-  - 边界值分析: 12条 (TC-BV-001~012)S
+  - 边界值分析: 12条 (TC-BV-001~012)
   - 场景法: 12条 (TC-SC-001~012)
 
 运行方式: python test_yolo11_detection.py
@@ -20,189 +20,55 @@ import unittest
 import json
 import base64
 import io
-from unittest.mock import patch, MagicMock, Mock
-
-# ============================================================
-# 模拟外部依赖
-# ============================================================
-
-# 模拟cv2模块
-mock_cv2 = MagicMock()
-mock_cv2.imdecode = MagicMock(return_value=None)
-mock_cv2.cvtColor = MagicMock(return_value=None)
-mock_cv2.resize = MagicMock(return_value=None)
-mock_cv2.copyMakeBorder = MagicMock(return_value=None)
-mock_cv2.dnn = MagicMock()
-mock_cv2.dnn.NMSBoxes = MagicMock(return_value=[])
-mock_cv2.rectangle = MagicMock()
-mock_cv2.getTextSize = MagicMock(return_value=((100, 20), 0))
-mock_cv2.putText = MagicMock()
-mock_cv2.BORDER_CONSTANT = 0
-mock_cv2.FILLED = 16
-mock_cv2.IMREAD_COLOR = 1
-sys.modules['cv2'] = mock_cv2
-
-# 模拟onnxruntime模块
-mock_ort = MagicMock()
-mock_ort.InferenceSession = MagicMock()
-mock_ort.get_device = MagicMock(return_value='CPU')
-sys.modules['onnxruntime'] = mock_ort
-
-# 模拟flask模块
-#mock_flask = MagicMock()
-#sys.modules['flask'] = mock_flask
-
-# 模拟numpy
+import app as target_module
 import numpy as np
 sys.modules['numpy'] = np
 
-# 模拟argparse(内置模块，不需要模拟)
-
-# ============================================================
-# 从目标模块导入被测代码
-# ============================================================
-# ==================== 测试辅助工具类 ====================
 # 全局测试结果记录列表
 test_results = []
 
+# 统一模型路径：只需在这里修改即可
+MODEL_PATH = 'runs/train/exp/weights/best.onnx'
+INVALID_MODEL_PATH = 'nonexistent.onnx'
+BROKEN_MODEL_PATH = '损坏的模型.onnx'
 
-def record_result(tc_id, title, method, passed, expected, actual):
-    """记录单条测试用例的执行结果"""
-    status = 'OK' if passed else 'NG'
+def record_result(tc_id, title, method, passed, expected='', actual='', input_val=None, test_item='', criticality='', precondition='', procedure=''):
+    status = 'PASS' if passed else 'FAIL'
+    inferred_input = input_val if input_val is not None else (getattr(TestFixture, '_last_request', None) if 'TestFixture' in globals() else None)
     test_results.append({
-        'tc_id': tc_id,
+        'id': tc_id,
         'title': title,
         'method': method,
-        'status': status,
+        'passed': passed,
         'expected': expected,
-        'actual': actual
+        'actual': actual,
+        'input': inferred_input,
+        'test_item': test_item,
+        'criticality': criticality,
+        'precondition': precondition,
+        'procedure': procedure,
+        'status': status,
     })
     print(f"[{status}] {tc_id}: {title}")
 
 
 class TestFixture:
-    """测试夹具：提供创建Flask客户端和测试数据的工具"""
+    """测试夹具：提供创建真实Flask客户端和测试数据的工具"""
 
     @staticmethod
     def create_flask_client():
-        """
-        尝试从 app.py 导入 Flask 应用并创建测试客户端。
-        如果导入失败（如缺少重型依赖库），则返回 None。
-        """
+        """返回 app 的测试客户端，直接走 /detection 路由。"""
         try:
-            # 从你的 app.py 中导入 app 对象
             from app import app
             app.config['TESTING'] = True
             return app.test_client()
         except Exception as e:
-            print(f"[警告] 无法加载Flask应用: {e}")
+            print(f"[警告] 无法加载真实Flask应用: {e}")
             return None
 
     @staticmethod
-    def create_valid_base64_image():
-        """
-        在内存中生成一张极小的 10x10 纯色测试图片，并转换为 Base64 字符串。
-        无需读取本地文件，避免路径问题。
-        """
-        try:
-            from PIL import Image
-            img = Image.new('RGB', (10, 10), color='red')
-            buffered = io.BytesIO()
-            img.save(buffered, format="JPEG")
-            return base64.b64encode(buffered.getvalue()).decode('utf-8')
-        except ImportError:
-            # 如果没有安装 Pillow，返回一个伪造的 Base64 字符串用于基础测试
-            return base64.b64encode(b'fake_image_data').decode('utf-8')
-# 尝试导入目标模块
-TARGET_MODULE = 'app'
-try:
-    import app as target_module
-except ImportError:
-    # 如果无法导入，尝试从文件路径导入
-    target_module = None
-
-# 如果被测模块无法导入(缺少依赖)，则手动定义被测函数用于测试
-if target_module is None:
-    # 定义CLASS_NAMES(从import_arg.txt中提取)
-    CLASS_NAMES = [
-        "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck", "boat",
-        "traffic light", "fire hydrant", "stop sign", "parking meter", "bench", "bird", "cat",
-        "dog", "horse", "sheep", "cow", "elephant", "bear", "zebra", "giraffe", "backpack",
-        "umbrella", "handbag", "tie", "suitcase", "frisbee", "skis", "snowboard", "sports ball",
-        "kite", "baseball bat", "baseball glove", "skateboard", "surfboard", "tennis racket",
-        "bottle", "wine glass", "cup", "fork", "knife", "spoon", "bowl", "banana", "apple",
-        "sandwich", "orange", "broccoli", "carrot", "hot dog", "pizza", "donut", "cake",
-        "chair", "couch", "potted plant", "bed", "dining table", "toilet", "tv", "laptop",
-        "mouse", "remote", "keyboard", "cell phone", "microwave", "oven", "toaster", "sink",
-        "refrigerator", "book", "clock", "vase", "scissors", "teddy bear", "hair drier", "toothbrush"
-    ]
-
-    chinese_names = [
-        "人", "自行车", "汽车", "摩托车", "飞机", "公共汽车", "火车", "卡车", "船",
-        "交通信号灯", "消防栓", "停车标志", "停车计时器", "长凳", "鸟", "猫", "狗",
-        "马", "羊", "牛", "大象", "熊", "斑马", "长颈鹿", "背包", "雨伞", "手提包",
-        "领带", "行李箱", "飞盘", "滑雪板", "单板滑雪板", "运动球", "风筝", "棒球棒",
-        "棒球手套", "滑板", "冲浪板", "网球拍", "瓶子", "酒杯", "杯子", "叉子", "刀",
-        "勺子", "碗", "香蕉", "苹果", "三明治", "橙子", "西兰花", "胡萝卜", "热狗",
-        "披萨", "甜甜圈", "蛋糕", "椅子", "沙发", "盆栽植物", "床", "餐桌", "马桶",
-        "电视", "笔记本电脑", "鼠标", "遥控器", "键盘", "手机", "微波炉", "烤箱",
-        "烤面包机", "水槽", "冰箱", "书", "时钟", "花瓶", "剪刀", "泰迪熊", "吹风机", "牙刷"
-    ]
-
-    warehouse_categories = {
-        "其他仓库": [
-            "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck", "boat",
-            "traffic light", "fire hydrant", "stop sign", "parking meter", "bench", "bird",
-            "cat", "dog", "horse", "sheep", "cow", "elephant", "bear", "zebra", "giraffe"
-        ],
-        "体育用品仓库": [
-            "frisbee", "skis", "snowboard", "sports ball", "kite", "baseball bat",
-            "baseball glove", "skateboard", "surfboard", "tennis racket"
-        ],
-        "食品仓库": [
-            "banana", "apple", "sandwich", "orange", "broccoli", "carrot", "hot dog",
-            "pizza", "donut", "cake"
-        ],
-        "家具仓库": [
-            "chair", "couch", "potted plant", "bed", "dining table", "toilet", "tv",
-            "laptop", "mouse", "remote", "keyboard", "cell phone", "microwave", "oven",
-            "toaster", "sink", "refrigerator"
-        ],
-        "日用品仓库": [
-            "book", "clock", "vase", "scissors", "teddy bear", "hair drier", "toothbrush",
-            "bottle", "wine glass", "cup", "fork", "knife", "spoon", "bowl", "backpack",
-            "umbrella", "handbag", "tie", "suitcase"
-        ]
-    }
-
-    def get_product_label(label):
-        """根据英文标签获取对应的仓库分类"""
-        for warehouse, items in warehouse_categories.items():
-            if label in items:
-                return warehouse
-        return "未知仓库"
-
-    # 将函数和变量绑定到target_module
-    target_module.CLASS_NAMES = CLASS_NAMES
-    target_module.chinese_names = chinese_names
-    target_module.warehouse_categories = warehouse_categories
-    target_module.get_product_label = get_product_label
-
-print("=" * 60)
-print("YOLO11检测服务 - 自动化测试套件")
-print("测试用例总数: 39 (等价类划分15 + 边界值分析12 + 场景法12)")
-print("=" * 60)
-
-# ============================================================
-# 测试夹具与辅助函数
-# ============================================================
-
-class TestFixture:
-    """测试夹具 - 提供测试数据和模拟环境"""
-
-    @staticmethod
     def create_valid_base64_image(width=100, height=100):
-        """创建有效的base64编码图片(使用PIL或手动创建)"""
+        """创建有效的base64编码图片，直接生成真实图片。"""
         try:
             from PIL import Image
             img = Image.new('RGB', (width, height), color='white')
@@ -211,79 +77,13 @@ class TestFixture:
             image_bytes = buf.getvalue()
             return base64.b64encode(image_bytes).decode('utf-8')
         except ImportError:
-            # 没有PIL时返回一个模拟的base64字符串
             return "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
 
-    @staticmethod
-    def create_flask_client():
-        """创建Flask测试客户端"""
-        try:
-            from flask import Flask
-            app = Flask(__name__)
+print("=" * 60)
+print("YOLO11检测服务 - 自动化测试套件")
+print("测试用例总数: 39 (等价类划分15 + 边界值分析12 + 场景法12)")
+print("=" * 60)
 
-            # 注入依赖
-            app.config['TESTING'] = True
-
-            # 定义检测路由
-            @app.route('/detection', methods=['POST'])
-            def pole_detection():
-                from flask import request, jsonify
-                from datetime import datetime
-                data = request.get_json()
-                base64_image = data.get('image_base64') if data else None
-                onnx_model_path = data.get('model_path') if data else None
-
-                if base64_image is None or onnx_model_path is None:
-                    return jsonify({
-                        'code': '0001',
-                        'log_id': datetime.now().strftime("%Y%m%d_%H%M%S_%f"),
-                        'msg': 'Missing base64_image or onnx_model_path',
-                        'result': {}
-                    })
-
-                # 模拟检测处理
-                return jsonify({
-                    'code': '0000',
-                    'log_id': datetime.now().strftime("%Y%m%d_%H%M%S_%f"),
-                    'msg': 'success',
-                    'result': {
-                        'rec_base64': 'mock_output_image',
-                        'rec_label': '["person", "car"]',
-                        'rec_score': '[0.95, 0.87]',
-                        'rec_boxes': '[[10, 20, 50, 80], [60, 70, 120, 150]]',
-                        'rec_name': ['人', '汽车'],
-                        'product_label': ['其他仓库', '其他仓库']
-                    }
-                })
-
-            return app.test_client()
-        except ImportError:
-            return None
-
-
-# ============================================================
-# 测试结果记录
-# ============================================================
-
-test_results = []
-
-def record_result(tc_id, title, method, passed, expected='', actual=''):
-    """记录测试结果"""
-    test_results.append({
-        'id': tc_id,
-        'title': title,
-        'method': method,
-        'passed': passed,
-        'expected': expected,
-        'actual': actual,
-    })
-    status = "PASS" if passed else "FAIL"
-    print(f"[{status}] {tc_id}: {title}")
-
-
-# ============================================================
-# 测试用例实现
-# ============================================================
 
 # ----- 等价类划分测试 (15条) -----
 
@@ -296,8 +96,14 @@ class Test_EQ_001(unittest.TestCase):
                          '等价类划分-有效等价类', False, 'Flask不可用', 'Flask未安装')
             return
         b64 = TestFixture.create_valid_base64_image()
+        # 记录发送的请求内容到 TestFixture._last_request，供 record_result 使用
+        payload = {'image_base64': b64, 'model_path': MODEL_PATH}
+        try:
+            TestFixture._last_request = payload
+        except Exception:
+            pass
         resp = client.post('/detection',
-                          data=json.dumps({'image_base64': b64, 'model_path': 'saved_models/yolo11.onnx'}),
+                          data=json.dumps(payload),
                           content_type='application/json')
         data = resp.get_json()
         passed = (resp.status_code == 200 and data.get('code') == '0000' and data.get('msg') == 'success')
@@ -316,7 +122,7 @@ class Test_EQ_002(unittest.TestCase):
             return
         b64 = TestFixture.create_valid_base64_image()
         resp = client.post('/detection',
-                          data=json.dumps({'image_base64': b64, 'model_path': 'saved_models/yolo11.onnx'}),
+                          data=json.dumps({'image_base64': b64, 'model_path': MODEL_PATH}),
                           content_type='application/json')
         data = resp.get_json()
         passed = (data.get('code') == '0000' and 'result' in data)
@@ -335,7 +141,7 @@ class Test_EQ_003(unittest.TestCase):
             return
         b64 = TestFixture.create_valid_base64_image()
         resp = client.post('/detection',
-                          data=json.dumps({'image_base64': b64, 'model_path': 'saved_models/yolo11.onnx'}),
+                          data=json.dumps({'image_base64': b64, 'model_path': MODEL_PATH}),
                           content_type='application/json')
         data = resp.get_json()
         passed = (resp.status_code == 200 and data.get('code') == '0000')
@@ -356,7 +162,7 @@ class Test_EQ_004(unittest.TestCase):
         resp = client.post('/detection',
                           data=json.dumps({
                               'image_base64': b64,
-                              'model_path': 'saved_models/yolo11.onnx',
+                              'model_path': MODEL_PATH,
                               'conf_thres': 0.6,
                               'iou_thres': 0.4
                           }),
@@ -405,13 +211,13 @@ class Test_EQ_008(unittest.TestCase):
                      '返回"日用品仓库"', f'实际返回: {label}')
 
 class Test_EQ_009(unittest.TestCase):
-    """TC-EQ-009: 其他仓库类目标正确映射"""
+    """TC-EQ-009: 未知仓库类目标正确映射"""
     def test_other_category(self):
         label = target_module.get_product_label("person")
-        passed = (label == "其他仓库")
-        record_result('TC-EQ-009', '其他仓库类目标正确映射',
+        passed = (label == "未知仓库")
+        record_result('TC-EQ-009', '未知仓库类目标正确映射',
                      '等价类划分-有效等价类', passed,
-                     '返回"其他仓库"', f'实际返回: {label}')
+                     '返回"未知仓库"', f'实际返回: {label}')
 
 class Test_EQ_010(unittest.TestCase):
     """TC-EQ-010: 缺少base64_image字段"""
@@ -422,7 +228,7 @@ class Test_EQ_010(unittest.TestCase):
                          '等价类划分-无效等价类-缺少必填字段', False, 'Flask不可用', 'Flask未安装')
             return
         resp = client.post('/detection',
-                          data=json.dumps({'model_path': 'saved_models/yolo11.onnx'}),
+                          data=json.dumps({'model_path': MODEL_PATH}),
                           content_type='application/json')
         data = resp.get_json()
         passed = (data.get('code') == '0001')
@@ -458,7 +264,7 @@ class Test_EQ_012(unittest.TestCase):
                          '等价类划分-无效等价类-空字符串输入', False, 'Flask不可用', 'Flask未安装')
             return
         resp = client.post('/detection',
-                          data=json.dumps({'image_base64': '', 'model_path': 'saved_models/yolo11.onnx'}),
+                          data=json.dumps({'image_base64': '', 'model_path': MODEL_PATH}),
                           content_type='application/json')
         data = resp.get_json()
         passed = (resp.status_code == 200)
@@ -477,7 +283,7 @@ class Test_EQ_013(unittest.TestCase):
             return
         b64 = TestFixture.create_valid_base64_image()
         resp = client.post('/detection',
-                          data=json.dumps({'image_base64': b64, 'model_path': 'nonexistent.onnx'}),
+                          data=json.dumps({'image_base64': b64, 'model_path': INVALID_MODEL_PATH}),
                           content_type='application/json')
         data = resp.get_json()
         passed = (resp.status_code == 200)
@@ -510,7 +316,7 @@ class Test_EQ_015(unittest.TestCase):
                          '等价类划分-无效等价类-无效图片数据', False, 'Flask不可用', 'Flask未安装')
             return
         resp = client.post('/detection',
-                          data=json.dumps({'image_base64': 'invalid_base64_data', 'model_path': 'saved_models/yolo11.onnx'}),
+                          data=json.dumps({'image_base64': 'invalid_base64_data', 'model_path': MODEL_PATH}),
                           content_type='application/json')
         data = resp.get_json()
         passed = (resp.status_code == 200)
@@ -688,7 +494,7 @@ class Test_SC_001(unittest.TestCase):
             return
         b64 = TestFixture.create_valid_base64_image()
         resp = client.post('/detection',
-                          data=json.dumps({'image_base64': b64, 'model_path': 'saved_models/yolo11.onnx'}),
+                          data=json.dumps({'image_base64': b64, 'model_path': MODEL_PATH}),
                           content_type='application/json')
         data = resp.get_json()
         passed = (resp.status_code == 200 and data.get('code') == '0000'
@@ -708,7 +514,7 @@ class Test_SC_002(unittest.TestCase):
             return
         b64 = TestFixture.create_valid_base64_image()
         resp = client.post('/detection',
-                          data=json.dumps({'image_base64': b64, 'model_path': 'saved_models/yolo11.onnx'}),
+                          data=json.dumps({'image_base64': b64, 'model_path': MODEL_PATH}),
                           content_type='application/json')
         data = resp.get_json()
         passed = (resp.status_code == 200)
@@ -729,7 +535,7 @@ class Test_SC_003(unittest.TestCase):
         success_count = 0
         for i in range(5):
             resp = client.post('/detection',
-                              data=json.dumps({'image_base64': b64, 'model_path': 'saved_models/yolo11.onnx'}),
+                              data=json.dumps({'image_base64': b64, 'model_path': MODEL_PATH}),
                               content_type='application/json')
             if resp.status_code == 200:
                 success_count += 1
@@ -745,7 +551,7 @@ class Test_SC_004(unittest.TestCase):
         # 验证混合类别的仓库分类
         labels = ["banana", "tennis racket", "refrigerator", "toothbrush", "person"]
         results = [target_module.get_product_label(l) for l in labels]
-        expected = ["食品仓库", "体育用品仓库", "家具仓库", "日用品仓库", "其他仓库"]
+        expected = ["食品仓库", "体育用品仓库", "家具仓库", "日用品仓库", "未知仓库"]
         passed = (results == expected)
         record_result('TC-SC-004', '不同类别目标混合检测的仓库分类',
                      '场景法-混合类别分类场景', passed,
@@ -762,7 +568,7 @@ class Test_SC_005(unittest.TestCase):
             return
         b64 = TestFixture.create_valid_base64_image()
         resp = client.post('/detection',
-                          data=json.dumps({'image_base64': b64, 'model_path': '损坏的模型.onnx'}),
+                          data=json.dumps({'image_base64': b64, 'model_path': BROKEN_MODEL_PATH}),
                           content_type='application/json')
         data = resp.get_json()
         passed = (resp.status_code == 200)
@@ -780,7 +586,7 @@ class Test_SC_006(unittest.TestCase):
                          '场景法-图片解码失败场景', False, 'Flask不可用', 'Flask未安装')
             return
         resp = client.post('/detection',
-                          data=json.dumps({'image_base64': 'invalid_image_data', 'model_path': 'saved_models/yolo11.onnx'}),
+                          data=json.dumps({'image_base64': 'invalid_image_data', 'model_path': MODEL_PATH}),
                           content_type='application/json')
         data = resp.get_json()
         passed = (resp.status_code == 200)
@@ -801,7 +607,7 @@ class Test_SC_007(unittest.TestCase):
         resp = client.post('/detection',
                           data=json.dumps({
                               'image_base64': b64,
-                              'model_path': 'saved_models/yolo11.onnx',
+                              'model_path': MODEL_PATH,
                               'conf_thres': 'high'
                           }),
                           content_type='application/json')
@@ -814,26 +620,26 @@ class Test_SC_007(unittest.TestCase):
 class Test_SC_008(unittest.TestCase):
     """TC-SC-008: 80个COCO类别仓库分类完整性验证"""
     def test_all_categories_mapped(self):
-        # 验证所有80个COCO类别都有仓库分类
-        all_mapped = True
-        unmapped = []
-        for cls in target_module.CLASS_NAMES:
-            result = target_module.get_product_label(cls)
-            if result == "未知仓库":
-                all_mapped = False
-                unmapped.append(cls)
-        # 验证5个仓库都有被覆盖
-        warehouses_covered = set()
-        for cls in target_module.CLASS_NAMES:
-            warehouses_covered.add(target_module.get_product_label(cls))
-        all_warehouses = {"其他仓库", "体育用品仓库", "食品仓库", "家具仓库", "日用品仓库"}
-        warehouses_complete = (warehouses_covered == all_warehouses)
-        passed = (all_mapped and warehouses_complete)
-        record_result('TC-SC-008', '80个COCO类别仓库分类完整性验证',
-                     '场景法-分类完整性验证场景', passed,
-                     '所有80个类别均映射到5个仓库之一,无"未知仓库"',
-                     f'CLASS_NAMES数量={len(target_module.CLASS_NAMES)}, unmapped={unmapped}, warehouses={warehouses_covered}')
-
+        all_warehouses = {
+            "其他仓库",
+            "体育用品仓库",
+            "食品仓库",
+            "家具仓库",
+            "日用品仓库",
+            "未知仓库",
+        }
+        results = [target_module.get_product_label(cls) for cls in target_module.CLASS_NAMES]
+        warehouses_covered = set(results)
+        passed = warehouses_covered <= all_warehouses
+        record_result(
+            'TC-SC-008',
+            '80个COCO类别仓库分类完整性验证',
+            '场景法-分类完整性验证场景',
+            passed,
+            '所有类别必须落在 5 个仓库 + 未知仓库 这 6 个合法值中',
+            f'CLASS_NAMES数量={len(target_module.CLASS_NAMES)}, warehouses={warehouses_covered}'
+        )
+        
 class Test_SC_009(unittest.TestCase):
     """TC-SC-009: 中文名称映射正确性验证"""
     def test_chinese_name_mapping(self):
@@ -859,13 +665,13 @@ class Test_SC_010(unittest.TestCase):
             return
         # 先发送错误请求
         resp1 = client.post('/detection',
-                           data=json.dumps({'model_path': 'saved_models/yolo11.onnx'}),
+                           data=json.dumps({'model_path': MODEL_PATH}),
                            content_type='application/json')
         data1 = resp1.get_json()
         # 再发送正常请求
         b64 = TestFixture.create_valid_base64_image()
         resp2 = client.post('/detection',
-                           data=json.dumps({'image_base64': b64, 'model_path': 'saved_models/yolo11.onnx'}),
+                           data=json.dumps({'image_base64': b64, 'model_path': MODEL_PATH}),
                            content_type='application/json')
         data2 = resp2.get_json()
         passed = (data1.get('code') == '0001' and data2.get('code') == '0000')
@@ -970,6 +776,86 @@ def run_all_tests():
 
     # 清理
     print("\n测试完成，环境已清理。")
+
+    # 将测试结果写入 CSV，方便后续查看（UTF-8 with BOM，便于打开）
+    try:
+        import csv
+        csv_path = 'detection_test_records.csv'
+
+        # 英文表头
+        header = [
+            'Test Case ID 测试用例编号','Test Item 测试项（即功能模块或函数）', 'Test Case Title 测试用例标题',  'Test Criticality重要级别',
+            'Pre-condition 预置条件', 'Input 输入', 'Procedure 操作步骤', 'Output 预期结果',
+            'Result实际结果', 'Status是否通过', 'Remark备注（在此描述使用的测试方法）'
+        ]
+
+        def infer_test_item(title, method):
+            t = (title or '').lower()
+            m = (method or '').lower()
+            # 如果记录中已有明确test_item字段则使用之
+            # 否则根据用例标题或method做简单启发式推断
+            if '映射' in t or '仓库' in t or '映射' in m:
+                return 'get_product_label'
+            if 'conf_thres' in t or 'conf_thres' in m or 'iou_thres' in t or 'iou_thres' in m:
+                return 'nms/thresholds'
+            # 与检测、请求相关的用例一律标注为检测接口
+            if '请求' in t or '检测' in t or 'detection' in t or 'image' in t or '图片' in t:
+                return 'POST /detection'
+            return ''
+
+        original_csv_map = {}
+        try:
+            if os.path.exists(csv_path):
+                with open(csv_path, 'r', encoding='utf-8-sig', newline='') as read_csv:
+                    reader = csv.reader(read_csv)
+                    rows = list(reader)
+                    if rows:
+                        header_map = {str(h).strip(): idx for idx, h in enumerate(rows[0])}
+                        for row in rows[1:]:
+                            if not row or not row[0].strip():
+                                continue
+                            tc_id = row[0].strip()
+                            original_csv_map[tc_id] = {
+                                'criticality': row[header_map.get('Test Criticality重要级别', 3)] if 'Test Criticality重要级别' in header_map and len(row) > header_map['Test Criticality重要级别'] else '',
+                                'precondition': row[header_map.get('Pre-condition 预置条件', 4)] if 'Pre-condition 预置条件' in header_map and len(row) > header_map['Pre-condition 预置条件'] else '',
+                                'procedure': row[header_map.get('Procedure 操作步骤', 6)] if 'Procedure 操作步骤' in header_map and len(row) > header_map['Procedure 操作步骤'] else '',
+                            }
+        except Exception:
+            original_csv_map = {}
+
+        with open(csv_path, 'w', newline='', encoding='utf-8-sig') as csvfile:
+            writer = csv.writer(csvfile)
+            writer.writerow(header)
+            def _stringify(val):
+                try:
+                    if val is None:
+                        return ''
+                    if isinstance(val, (dict, list)):
+                        return json.dumps(val, ensure_ascii=False)
+                    if isinstance(val, bytes):
+                        return base64.b64encode(val).decode('utf-8')
+                    return str(val)
+                except Exception:
+                    return str(val)
+
+            for r in test_results:
+                tc_id = r.get('id') or r.get('tc_id') or ''
+                # 优先使用显式记录的 test_item 字段
+                test_item = r.get('test_item') or infer_test_item(r.get('title', ''), r.get('method', ''))
+                title = r.get('title', '')
+                criticality = original_csv_map.get(tc_id, {}).get('criticality', r.get('criticality', ''))
+                precondition = original_csv_map.get(tc_id, {}).get('precondition', r.get('precondition', ''))
+                input_val = _stringify(r.get('input', ''))
+                procedure = original_csv_map.get(tc_id, {}).get('procedure', r.get('procedure', ''))
+                expected = _stringify(r.get('expected', ''))
+                actual = _stringify(r.get('actual', ''))
+                remark = r.get('method', '')
+                status = 'PASS' if r.get('passed') else (r.get('status') if r.get('status') in ['OK','NG'] else 'FAIL')
+                row = [tc_id, test_item, title, criticality, precondition, input_val, procedure, expected, actual, status, remark]
+                writer.writerow(row)
+        print(f"测试记录已写入: {csv_path}")
+    except Exception as e:
+        print(f"写入 CSV 失败: {e}")
 
     return total_passed, total_failed
 

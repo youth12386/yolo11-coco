@@ -75,12 +75,6 @@ mkdir runs\train\exp\weights
 
 ## 4. 启动物品检测服务
 
-在项目根目录执行：
-
-```powershell
-python app.py
-```
-
 ### 4.1 检测接口
 
 接口地址：
@@ -114,14 +108,3 @@ POST /detection
   }
 }
 ```
-
-## 目录说明
-
-- [app.py](app.py)：Flask 服务入口，提供检测接口
-- [train.py](train.py)：YOLO11 训练脚本
-- [coco2yolo.py](coco2yolo.py)：数据转换脚本
-- [data_process.py](data_process.py)：数据处理脚本
-- [inference.py](inference.py)：推理脚本
-- [export2onnx.py](export2onnx.py)：模型导出到 ONNX
-- [requirements.txt](requirements.txt)：依赖列表
-- [docker/Dockerfile](docker/Dockerfile)：Docker 镜像构建文件
